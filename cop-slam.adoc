@@ -1,0 +1,274 @@
+= COP SLAM
+
+COP-SLAM son derece verimli bir kapalı formda 3-D SLAM yaklaşımıdır, poz zincirlerini çevrimiçi duruma getirir ve g2o ile uyumludur. COP-SLAM demo programı görsel odometri ve görünüş tabanlı döngü algılama ile elde edilen 60 kilometre poz zincir veri kümesiyle birlikte gelir.
+
+Kapalı form Çevrimiçi Pose-chain SLAM (COP-SLAM), Lie grup yapısını istifade ederek kapalı zincirlerdeki poz zincirlerini etkili ve doğru bir şekilde optimize eder.
+Poz zincirleri, son derece seyrek poz grafiklerin belirli bir türüdür ve doğru görsel odometri ve güvenilir görünüme dayalı döngü algılama gerçekleştiren çağdaş SLAM ön uçlarının bir ürünüdür.  
+Sık döngü algılamanın istenmediği veya mümkün olmadığı büyük ölçekli 3 boyutlu ortamlarda zorlu robot uygulamaları için uygundurlar. Kapalı-Form Online Pose-chain SLAM tarafından elde edilen doğruluğun, en son yenilikçi yinelemeli yöntemlerle karşılaştırılabilir olduğu gösterilmiştir; buna karşılık çözümü hesaplamaya ihtiyaç duyan zaman büyüklükleri kadardır. Bu yeni SLAM tekniği, geniş bir robot uygulamaları ve hesaplama platformları yelpazesiyle ilgilidir. COP-SLAM demo programının harici bağımlılıkları yoktur ve 60 kilometre kullanıma hazır poz-zincir veri kümesiyle birlikte gelir. Dolayısıyla, bu veri kümelerinde COP-SLAM'ın oluşturulması ve çalıştırılması süreci oldukça basittir.
+
+
+= KURULUM ve ÇALIŞTIRMA
+
+* <Dir> dizininde COP-SLAM paketini açtığınızı veya teslim aldığını varsayarak,
+
+* Yükleyin ve çalıştırın
+[source,java]
+$ cd <dir>/build
+$ cmake ../
+$ make install
+    
+
+Bu, her şeyi kurar ve dizindeki her şeyi yükler: <dir> / bin
+(Bu nedenle süper kullanıcı ayrıcalıkları gerekmez)
+
+* Tüm 7 veri kümesindeki COP-SLAM demo'sunu çalıştırın
+
+[source,java]
+$ cd <dir>/bin
+$ ./run_demo.sh
+
+* Tüm 7 veri kümesi için COP-SLAM sonuçlarını görselleştirin
+
+**1) **Octave (veya matlab) kullanın ve
+[source,java]
+$ octave
+>> cd <dir>/bin
+>> showG2OFiles
+
+**2)**Veya g2o paketinin g2o_viewer sürümünü kullanın. Daha fazla bilgi için openslam.org'daki g2o projesine bakın.
+
+
+image::https://raw.githubusercontent.com/Taifuru/robotik-cop-slam/master/cop.png[]
+
+= Özet
+
+Poz-grafik SLAM için kapalı formlu yeni bir çözüm sunulmuştur. Yörünge bükülmesinin genişletilmiş bir versiyonunu kullanarak poz zincirleri adı verilen özel yapının poz grafiklerini optimize eder. Çözümümüz, ön uçları son teknolojiye sahip görsel odometri ve görünüm tabanlı döngü algılama özelliğini kullanan sistemlerde kullanılmak üzere bir arka uç iyileştirici olarak tasarlanmıştır. Kapalı form yöntemimizin ve son teknoloji yineleyici yöntemlerin optimallik koşulları tartışılmıştır. Teorik farklılıklarının pratik önemi simüle edilmiş ve gerçek veriler kullanılarak yapılan kapsamlı deneylerle araştırılmıştır. 49 kilometrelik zorlayıcı binoküler verilerle gösterilmiştir; bu, kapalı form çözümümüz tarafından elde edilen doğruluk, en son teknoloji yinelemeli çözümlerle karşılaştırılabilir, ancak çözümünü hesaplamak için gereken süre 50 ila 200 kat arasında değişmektedir. Bu, yaklaşımımızı geniş bir uygulama yelpazesi ve hesaplama platformlarıyla ilişkilendirmektedir.
+
+= Algoritmaların (Matematiğin) Kod Karşılıkları
+
+*[underline]#Algoritma#*
+
+trajectory
+
+A~t~=^t^∏~i=1~ M~i~ = M~1~ * M~2~ * M~3~... * M~t~ (1)
+
+D~n~=A~n~*^n^∏~i=1~U~i~ (2)
+
+U~t~ = I(^t−1^Σ~i=1~w~i~)^−1^I(^t^Σ~i=1~w~i~) (3)
+
+I(α) = A~n~ * exp(α log(A~n~^−1^
+* D~n~)) (4)
+
+w~t~ =1/σ^2^~t~ ^n^Σ~i=1~1/σ^2^~i~ (5)
+
+*[underline]#Kod#*
+
+
+[source,]
+----
+// integrate trajectory upto current time-step
+	    integrateChain( start, end, true );
+
+	    // compute loop closure update
+	    // only keep transaltion part
+	    lcupdate = poseVector[end*4].inverse()*closeVector[n];
+	    lcupdate.linear() << 1.0f,0.0f,0.0f,
+				 0.0f,1.0f,0.0f,
+				 0.0f,0.0f,1.0f;
+
+	    // interpolate loop closure update into segments
+	    normalizers = normalizers + interpolateTra( lcupdate, closeVector[n], n, start, end );
+
+	    // apply the change of basis to the translation updates
+	    cobChain( start, end, TRANSLATION );
+
+	    // update the relative poses
+	    updateChain( start, end, TRANSLATION );
+	  }
+	}
+----
+
+[source,]
+----
+//
+// interpolate the loop closure update into segements
+//
+Eigen::Vector3f poseChain::interpolateRot( Eigen::Affine3f aupdate, Eigen::Affine3f adesired, const int aclosure, const int astart, const int aend )
+{
+   // helper variables
+   Eigen::AngleAxisf aa;
+   Eigen::Vector3f   normalizers(0.0f,0.0f,0.0f);
+   Eigen::Affine3f   before;
+   Eigen::Affine3f   after;
+   Eigen::Affine3f   motion;
+   Eigen::Affine3f   adesiredInv = adesired.inverse();
+   float             rotNormalizer, sv;
+
+   // convert rotation to tangent space at identity
+   aa = aupdate.rotation();
+   float angle = aa.angle();
+   if( M_PI < angle )
+     angle = angle - 2*M_PI;
+
+   // get normalizer for weights  
+   sv             = rotInfoVector.block( astart+1, 0, (aend-astart), 1 ).sum();
+   normalizers[1] = ( 1.0f / ( 1.0f + (sv/rotCloseInfoVector(aclosure)) ) );
+   rotNormalizer  = globalNormalizer * (sv + rotCloseInfoVector(aclosure));
+
+   // compute updates
+   int start     = (astart+1)*4; 
+   int end       = aend*4;
+   int nn        = (astart+1);
+   for( int n = start; n <= end; n = n+4 )
+   {
+
+      // compute relative rotation
+      motion.linear() = Eigen::AngleAxisf( angle*(rotInfoVector(nn,0)/rotNormalizer), aa.axis() ).toRotationMatrix();
+      poseVector[n+3].linear() = adesired.linear()*motion.linear()*adesiredInv.linear();      
+      nn++;     
+   }        
+
+   // return the normalizer for later use
+   return normalizers;
+
+}
+
+//
+// compute absolute poses from relative poses
+//
+void poseChain::integrateChain( const int astart, const int aend, const bool aidentity )
+{
+
+   // first abolute pose is identity
+   Eigen::Affine3f temp;
+   if( aidentity )
+   {
+     temp                 = poseVector[astart*4];
+     poseVector[astart*4] = Eigen::Translation<float,3>(0.0f,0.0f,0.0f) * Eigen::Quaternion<float>(1.0f,0.0f,0.0f,0.0f);
+   }
+
+   // go through the relative poses
+   int start = (astart+1)*4;
+   int end   = aend*4;     
+   EIGEN_ASM_COMMENT("begin");
+   for( int n = start; n <= end; n = n+4 )
+   {
+
+      // and integrate the absolute pose chain
+      poseVector[n] = poseVector[n-4]*poseVector[n+1];
+
+   }
+   EIGEN_ASM_COMMENT("end");
+
+   // set back
+   if( aidentity )
+   {
+     poseVector[astart*4] = temp;
+   }
+
+}
+
+//
+// compute absolute poses from relative poses
+//
+void poseChain::integrateChainNormalized( const int astart, const int aend, const bool normalize )
+{
+
+   // go through the relative poses
+   int start = (astart+1)*4;
+   int end   = aend*4;     
+   EIGEN_ASM_COMMENT("begin");
+   if( normalize )
+   {
+      // normalize relative poses
+      for( int n = start; n <= end; n = n+4 )
+      {
+	  // normalize relative rotations
+	  poseVector[n+1].linear() = poseVector[n+1].rotation();
+      }            
+   }
+
+   // integrate
+   for( int n = start; n <= end; n = n+4 )
+   {
+      // and integrate the absolute pose chain
+      poseVector[n] = poseVector[n-4]*poseVector[n+1];      
+   }
+
+   EIGEN_ASM_COMMENT("end");
+
+}
+----
+
+
+*[underline]#Algoritma#*
+
+B=1/(1/σ^2^~A~~n~+1/σ^2^~D~~n~)
+
+*[underline]#Kod#*
+
+[source,]
+----
+void poseChain::updateChain( const int astart, const int aend, const int amethod )
+{
+
+   // go through the relative poses
+   int start             = (astart+1)*4; 
+   int end               = aend*4;
+   int nn                = 0;
+   float scaleCorrection = 1.0f;
+   Eigen::Affine3f tmp;
+   EIGEN_ASM_COMMENT("begin");
+   if( amethod == BOTH )
+   {
+      for( int n = start; n <= end; n = n+4 )
+      {
+
+	  // update the relative poses
+	  tmp             = poseVector[n+1]*poseVector[n+3];
+	  poseVector[n+1] = tmp;
+
+      }
+   }
+   else if( amethod == ROTATION )
+   {
+      for( int n = start; n <= end; n = n+4 )
+      {	
+
+	  // update the relative rotations
+	  poseVector[n+1].linear() = poseVector[n+1].linear() * poseVector[n+3].linear();
+
+      }
+   }
+   else if( amethod == TRANSLATION )
+   {
+      for( int n = start; n <= end; n = n+4 )
+      {
+
+	  // update the relative translations
+	  poseVector[n+1].translation() = poseVector[n+1].translation() + poseVector[n+3].translation();
+
+      }
+   }
+   else if( amethod == SCALE )
+   {            
+
+      for( int n = start; n <= end; n = n+4 )
+      {
+
+	  // update the relative translations
+	  tmp                = poseVector[n+1];
+	  scaleCorrection    = scaleCorrection*pow( scaleCloseFactor, scaleInfoVector(astart+1+nn)/scaleNormalizer );	
+	  scaleVector(n/4,0) = scaleCorrection;
+	  tmp.translation()  = scaleCorrection*poseVector[n+1].translation();
+	  poseVector[n+1]    = tmp;	  
+	  nn++;
+
+      }            
+      cout << "Loop-closure final scale correction: " << scaleCorrection << endl;
+
+   } 
+   EIGEN_ASM_COMMENT("end"); 
+}
+----
+----
